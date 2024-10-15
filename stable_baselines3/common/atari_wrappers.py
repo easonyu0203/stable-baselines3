@@ -221,16 +221,18 @@ class WarpFrame(gym.ObservationWrapper[np.ndarray, int, np.ndarray]):
     :param height: New frame height
     """
 
-    def __init__(self, env: gym.Env, width: int = 84, height: int = 84) -> None:
+    def __init__(self, env: gym.Env, width: int = 84, height: int = 84, grayscale: bool = True) -> None:
         super().__init__(env)
         self.width = width
         self.height = height
+        self.grayscale = grayscale
         assert isinstance(env.observation_space, spaces.Box), f"Expected Box space, got {env.observation_space}"
 
+        channel_dim = 1 if self.grayscale else 3
         self.observation_space = spaces.Box(
             low=0,
             high=255,
-            shape=(self.height, self.width, 1),
+            shape=(self.height, self.width, channel_dim),
             dtype=env.observation_space.dtype,  # type: ignore[arg-type]
         )
 
@@ -242,9 +244,13 @@ class WarpFrame(gym.ObservationWrapper[np.ndarray, int, np.ndarray]):
         :return: the observation
         """
         assert cv2 is not None, "OpenCV is not installed, you can do `pip install opencv-python`"
-        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-        frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_AREA)
-        return frame[:, :, None]
+        if self.grayscale:
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+            frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_AREA)
+            return frame[:, :, None]
+        else:
+            frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_AREA)
+            return frame
 
 
 class AtariWrapper(gym.Wrapper[np.ndarray, int, np.ndarray, int]):
@@ -287,6 +293,7 @@ class AtariWrapper(gym.Wrapper[np.ndarray, int, np.ndarray, int]):
         terminal_on_life_loss: bool = True,
         clip_reward: bool = True,
         action_repeat_probability: float = 0.0,
+        grayscale_obs: bool = True,
     ) -> None:
         if action_repeat_probability > 0.0:
             env = StickyActionEnv(env, action_repeat_probability)
@@ -299,7 +306,7 @@ class AtariWrapper(gym.Wrapper[np.ndarray, int, np.ndarray, int]):
             env = EpisodicLifeEnv(env)
         if "FIRE" in env.unwrapped.get_action_meanings():  # type: ignore[attr-defined]
             env = FireResetEnv(env)
-        env = WarpFrame(env, width=screen_size, height=screen_size)
+        env = WarpFrame(env, width=screen_size, height=screen_size, grayscale=grayscale_obs)
         if clip_reward:
             env = ClipRewardEnv(env)
 
