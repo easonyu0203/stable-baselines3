@@ -11,6 +11,7 @@ import numpy as np
 import torch as th
 from gymnasium import spaces
 from torch import nn
+import torch.nn.functional as F
 
 from stable_baselines3.common.distributions import (
     BernoulliDistribution,
@@ -985,3 +986,93 @@ class ContinuousCritic(BaseModel):
         with th.no_grad():
             features = self.extract_features(obs, self.features_extractor)
         return self.q_networks[0](th.cat([features, actions], dim=1))
+
+
+class RNDActorCriticPolicy(ActorCriticPolicy):
+    """
+    Policy class with Random Network Distillation (RND).
+    It is used by the RND algorithm.
+    """
+
+    def __init__(
+        self,
+        observation_space: spaces.Space,
+        action_space: spaces.Space,
+        lr_schedule: Schedule,
+        rnd_feature_dim: int,
+        net_arch: Optional[Union[List[int], Dict[str, List[int]]]] = None,
+        activation_fn: Type[nn.Module] = nn.Tanh,
+        ortho_init: bool = True,
+        use_sde: bool = False,
+        log_std_init: float = 0.0,
+        full_std: bool = True,
+        use_expln: bool = False,
+        squash_output: bool = False,
+        features_extractor_class: Type[BaseFeaturesExtractor] = FlattenExtractor,
+        features_extractor_kwargs: Optional[Dict[str, Any]] = None,
+        share_features_extractor: bool = True,
+        normalize_images: bool = True,
+        optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
+        optimizer_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            observation_space,
+            action_space,
+            lr_schedule,
+            net_arch,
+            activation_fn,
+            ortho_init,
+            use_sde,
+            log_std_init,
+            full_std,
+            use_expln,
+            squash_output,
+            features_extractor_class,
+            features_extractor_kwargs,
+            share_features_extractor,
+            normalize_images,
+            optimizer_class,
+            optimizer_kwargs,
+        )
+
+        self.rnd_feature_extractor = FlattenExtractor(observation_space) # flatten the observation for rnd
+        self.rnd_target = nn.Sequential(
+            nn.Linear(self.rnd_feature_extractor.features_dim, 32),
+            nn.ReLU(),
+            nn.Linear(32, rnd_feature_dim),
+        )
+        self.rnd_predictor = nn.Sequential(
+            nn.Linear(self.rnd_feature_extractor.features_dim, 32),
+            nn.ReLU(),
+            nn.Linear(32, rnd_feature_dim),
+        )
+
+        # Initialize the weights of the RND target network
+        self.rnd_target.apply(partial(self.init_weights, gain=np.sqrt(2)))
+
+        # freeze the target network
+        for param in self.rnd_target.parameters():
+            param.requires_grad = False
+
+
+    def rnd_forward(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
+        """
+        Forward pass in the RND networks.
+
+        :param obs: Observation
+        :return: target and predictor features
+        """
+        rnd_features = self.rnd_feature_extractor(obs)
+        target_features = self.rnd_target(rnd_features)
+        predictor_features = self.rnd_predictor(rnd_features)
+        return target_features, predictor_features
+    
+    def rnd_loss(self, obs: th.Tensor) -> th.Tensor:
+        """
+        Compute the RND loss.
+
+        :param obs: Observation
+        :return: RND loss
+        """
+        target_features, predictor_features = self.rnd_forward(obs)
+        return F.mse_loss(target_features, predictor_features)
