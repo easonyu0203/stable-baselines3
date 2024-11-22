@@ -10,7 +10,7 @@ from gymnasium import spaces
 from stable_baselines3.common.base_class import BaseAlgorithm
 from stable_baselines3.common.buffers import DictRolloutBuffer, RolloutBuffer
 from stable_baselines3.common.callbacks import BaseCallback
-from stable_baselines3.common.policies import ActorCriticPolicy
+from stable_baselines3.common.policies import RNDActorCriticPolicy
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
 from stable_baselines3.common.utils import obs_as_tensor, safe_mean
 from stable_baselines3.common.vec_env import VecEnv
@@ -56,11 +56,11 @@ class RNDOnPolicyAlgorithm(BaseAlgorithm):
     """
 
     rollout_buffer: RolloutBuffer
-    policy: ActorCriticPolicy
+    policy: RNDActorCriticPolicy
 
     def __init__(
         self,
-        policy: Union[str, Type[ActorCriticPolicy]],
+        policy: Union[str, Type[RNDActorCriticPolicy]],
         env: Union[GymEnv, str],
         learning_rate: Union[float, Schedule],
         n_steps: int,
@@ -200,6 +200,8 @@ class RNDOnPolicyAlgorithm(BaseAlgorithm):
                 # Convert to pytorch tensor or to TensorDict
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
                 actions, values, log_probs = self.policy(obs_tensor)
+                intr_reward = self.policy.compute_intrinsic_reward(obs_tensor, update_rms=True)
+                intr_reward = intr_reward.cpu().numpy()
             actions = actions.cpu().numpy()
 
             # Rescale and perform action
@@ -217,8 +219,8 @@ class RNDOnPolicyAlgorithm(BaseAlgorithm):
 
             new_obs, rewards, dones, infos = env.step(clipped_actions)
 
-            # Perform mutation on the rewards if needed
-            rewards = self.mutate_rewards(rewards)
+            # TODO: This is placeholder where we replace the extrinsic reward with the intrinsic reward
+            rewards = intr_reward
 
             self.num_timesteps += env.num_envs
 
@@ -269,14 +271,6 @@ class RNDOnPolicyAlgorithm(BaseAlgorithm):
         callback.on_rollout_end()
 
         return True
-
-    def mutate_rewards(self, rewards: np.ndarray) -> np.ndarray:
-        """
-        Mutate the rewards if needed.
-
-        :return: The mutated rewards
-        """
-        return rewards
 
     def train(self) -> None:
         """

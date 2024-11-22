@@ -41,6 +41,7 @@ class RNDPPO(RNDOnPolicyAlgorithm):
     :param normalize_advantage: Whether to normalize or not the advantage
     :param ent_coef: Entropy coefficient for the loss calculation
     :param vf_coef: Value function coefficient for the loss calculation
+    :param rnd_coef: Intrinsic reward coefficient for the loss calculation
     :param max_grad_norm: The maximum value for the gradient clipping
     :param use_sde: Whether to use generalized State Dependent Exploration (gSDE)
         instead of action noise exploration (default: False)
@@ -85,6 +86,7 @@ class RNDPPO(RNDOnPolicyAlgorithm):
         normalize_advantage: bool = True,
         ent_coef: float = 0.0,
         vf_coef: float = 0.5,
+        rnd_coef: float = 0.1,
         max_grad_norm: float = 0.5,
         use_sde: bool = False,
         sde_sample_freq: int = -1,
@@ -127,6 +129,7 @@ class RNDPPO(RNDOnPolicyAlgorithm):
                 spaces.MultiBinary,
             ),
         )
+        self.rnd_coef = rnd_coef
 
         # Sanity check, otherwise it will lead to noisy gradient and NaN
         # because of the advantage normalization
@@ -174,15 +177,6 @@ class RNDPPO(RNDOnPolicyAlgorithm):
 
             self.clip_range_vf = get_schedule_fn(self.clip_range_vf)
 
-    def mutate_rewards(self, rewards: np.ndarray) -> np.ndarray:
-        """
-        Use RND as reward
-
-        :return: The rnd rewards
-        """
-        
-
-        return rewards
 
     def train(self) -> None:
         """
@@ -200,6 +194,8 @@ class RNDPPO(RNDOnPolicyAlgorithm):
 
         entropy_losses = []
         pg_losses, value_losses = [], []
+        rnd_losses = []
+        raw_intr_rewards = []
         clip_fractions = []
 
         continue_training = True
@@ -256,7 +252,22 @@ class RNDPPO(RNDOnPolicyAlgorithm):
 
                 entropy_losses.append(entropy_loss.item())
 
-                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
+                # RND Loss
+                rnd_loss = self.policy.compute_intrinsic_reward(rollout_data.observations)
+                # create a mask 
+                mask = th.ones_like(rnd_loss) # TODO: maybe use a threshold
+                rnd_loss = th.sum(rnd_loss * mask) / th.sum(mask)
+
+                rnd_losses.append(rnd_loss.item())
+
+                # raw intrinsic rewards
+                with th.no_grad():
+                    target_features, predictor_features = self.policy.rnd_forward(rollout_data.observations)
+                    raw_intr_reward = F.mse_loss(target_features, predictor_features, reduction='none').mean(1)
+                    raw_intr_rewards.append(raw_intr_reward.mean().item())
+
+
+                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss + self.rnd_coef * rnd_loss
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
                 # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
@@ -288,6 +299,8 @@ class RNDPPO(RNDOnPolicyAlgorithm):
 
         # Logs
         self.logger.record("train/entropy_loss", np.mean(entropy_losses))
+        self.logger.record("train/rnd_loss", np.mean(rnd_losses))
+        self.logger.record("train/raw_intr_reward", np.mean(raw_intr_rewards))
         self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
         self.logger.record("train/value_loss", np.mean(value_losses))
         self.logger.record("train/approx_kl", np.mean(approx_kl_divs))

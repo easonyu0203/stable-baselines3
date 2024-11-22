@@ -1,0 +1,91 @@
+import torch
+import torch.nn as nn
+from typing import Tuple
+
+class RunningMeanStd(nn.Module):
+    def __init__(self, epsilon: float = 1e-4, shape: Tuple[int, ...] = ()) -> None:
+        """
+        Initializes the RunningMeanStd module.
+
+        Args:
+            epsilon (float): A small value to initialize the count for numerical stability.
+            shape (Tuple[int, ...]): The shape of the mean and variance tensors.
+        """
+        super(RunningMeanStd, self).__init__()
+        # Non-trainable parameters for mean, variance, and count
+        self.register_buffer('mean', torch.zeros(shape, dtype=torch.float64))
+        self.register_buffer('var', torch.ones(shape, dtype=torch.float64))
+        self.register_buffer('count', torch.tensor(epsilon, dtype=torch.float64))
+
+    def update(self, x: torch.Tensor) -> None:
+        """
+        Update the running mean and variance with a batch of data.
+
+        Args:
+            x (torch.Tensor): Input data of shape (batch_size, ...).
+        """
+        # Ensure input is a PyTorch tensor and matches device and dtype
+        x = x.to(dtype=torch.float64, device=self.mean.device)
+
+        # Compute batch statistics
+        batch_mean = x.mean(dim=0)
+        batch_var = x.var(dim=0, unbiased=False)
+        batch_count = x.shape[0]
+
+        # Update the statistics using batch moments
+        self.update_from_moments(batch_mean, batch_var, batch_count)
+
+    def update_from_moments(
+        self, batch_mean: torch.Tensor, batch_var: torch.Tensor, batch_count: int
+    ) -> None:
+        """
+        Update the running statistics from batch moments.
+
+        Args:
+            batch_mean (torch.Tensor): Mean of the batch.
+            batch_var (torch.Tensor): Variance of the batch.
+            batch_count (int): Number of samples in the batch.
+        """
+        delta = batch_mean - self.mean
+        total_count = self.count + batch_count
+
+        # Update mean
+        self.mean += delta * batch_count / total_count
+
+        # Update variance
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
+        M2 = m_a + m_b + delta**2 * self.count * batch_count / total_count
+        self.var = M2 / total_count
+
+        # Update count
+        self.count = total_count
+
+    def normalize(self, x: torch.Tensor, n_std: float = 1.0) -> torch.Tensor:
+        """
+        Normalize the input using the running mean and standard deviation.
+
+        Args:
+            x (torch.Tensor): Input data to be normalized.
+            n_std (int): Number of standard deviations to normalize.
+
+        Returns:
+            torch.Tensor: Normalized data.
+        """
+        return (x - self.mean) / (torch.sqrt(self.var) * n_std + 1e-6)
+
+
+# Example Usage
+if __name__ == "__main__":
+    model = RunningMeanStd(shape=())
+    
+    # Simulate some batches of data
+    batch1 = torch.tensor([1.0, 2.0, 3.0, 4.0])
+    batch2 = torch.tensor([5.0, 6.0, 7.0, 8.0])
+    
+    # Update running statistics with each batch
+    model.update(batch1)
+    print("After Batch 1:", model.mean.item(), torch.sqrt(model.var).item())
+
+    model.update(batch2)
+    print("After Batch 2:", model.mean.item(), torch.sqrt(model.var).item())

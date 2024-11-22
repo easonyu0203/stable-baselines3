@@ -23,6 +23,7 @@ from stable_baselines3.common.distributions import (
     make_proba_distribution,
 )
 from stable_baselines3.common.preprocessing import get_action_dim, is_image_space, maybe_transpose, preprocess_obs
+from stable_baselines3.common.eason_utils import RunningMeanStd
 from stable_baselines3.common.torch_layers import (
     BaseFeaturesExtractor,
     CombinedExtractor,
@@ -1034,16 +1035,20 @@ class RNDActorCriticPolicy(ActorCriticPolicy):
             optimizer_class,
             optimizer_kwargs,
         )
-
+        
         self.rnd_feature_extractor = FlattenExtractor(observation_space) # flatten the observation for rnd
         self.rnd_target = nn.Sequential(
             nn.Linear(self.rnd_feature_extractor.features_dim, 32),
-            nn.ReLU(),
+            nn.LeakyReLU(),
+            nn.Linear(32, 32),
+            nn.LeakyReLU(),
             nn.Linear(32, rnd_feature_dim),
         )
         self.rnd_predictor = nn.Sequential(
             nn.Linear(self.rnd_feature_extractor.features_dim, 32),
-            nn.ReLU(),
+            nn.LeakyReLU(),
+            nn.Linear(32, 32),
+            nn.LeakyReLU(),
             nn.Linear(32, rnd_feature_dim),
         )
 
@@ -1054,6 +1059,9 @@ class RNDActorCriticPolicy(ActorCriticPolicy):
         for param in self.rnd_target.parameters():
             param.requires_grad = False
 
+        # keep track of the intrinsic rewards
+        self.intrinsic_reward_rms = RunningMeanStd(shape=())
+
 
     def rnd_forward(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
         """
@@ -1062,17 +1070,37 @@ class RNDActorCriticPolicy(ActorCriticPolicy):
         :param obs: Observation
         :return: target and predictor features
         """
-        rnd_features = self.rnd_feature_extractor(obs)
+        rnd_features = self.rnd_feature_extractor(obs.float())
         target_features = self.rnd_target(rnd_features)
         predictor_features = self.rnd_predictor(rnd_features)
         return target_features, predictor_features
     
-    def rnd_loss(self, obs: th.Tensor) -> th.Tensor:
+    
+    def compute_intrinsic_reward(self, obs: th.Tensor, update_rms=False) -> th.Tensor:
         """
-        Compute the RND loss.
+        Compute the intrinsic reward given the observations.
 
         :param obs: Observation
-        :return: RND loss
+        :return: Intrinsic reward
         """
         target_features, predictor_features = self.rnd_forward(obs)
-        return F.mse_loss(target_features, predictor_features)
+        rewards = F.mse_loss(target_features, predictor_features, reduction='none').mean(1)
+
+        # Update running mean/std for intrinsic reward
+        if update_rms:
+            self.update_intrinsic_reward_rms(rewards)
+
+        # normalize intrinsic rewards (Assuming rewards follow a Gaussian distribution
+        # 3 std from the mean should cover 99.7% of the distribution, and we clip the rewards)
+        rewards = self.intrinsic_reward_rms.normalize(rewards, n_std=3.0)
+        rewards = th.clamp(rewards, 0.0, 1.0)
+        return rewards
+
+
+    def update_intrinsic_reward_rms(self, intrinsic_rewards: th.Tensor) -> None:
+        """
+        Update the running mean and std of the intrinsic rewards.
+
+        :param intrinsic_rewards: Intrinsic rewards
+        """
+        self.intrinsic_reward_rms.update(intrinsic_rewards)
