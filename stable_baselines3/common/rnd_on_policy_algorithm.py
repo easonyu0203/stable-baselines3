@@ -24,6 +24,7 @@ class RNDOnPolicyAlgorithm(BaseAlgorithm):
 
     :param policy: The policy model to use (MlpPolicy, CnnPolicy, ...)
     :param env: The environment to learn from (if registered in Gym, can be str)
+    :param non_episodic: Whether to use non-episodic training
     :param learning_rate: The learning rate, it can be a function
         of the current progress remaining (from 1 to 0)
     :param n_steps: The number of steps to run for each environment per update
@@ -62,6 +63,7 @@ class RNDOnPolicyAlgorithm(BaseAlgorithm):
         self,
         policy: Union[str, Type[RNDActorCriticPolicy]],
         env: Union[GymEnv, str],
+        non_episodic: bool,
         learning_rate: Union[float, Schedule],
         n_steps: int,
         gamma: float,
@@ -100,6 +102,7 @@ class RNDOnPolicyAlgorithm(BaseAlgorithm):
             supported_action_spaces=supported_action_spaces,
         )
 
+        self.non_episodic = non_episodic
         self.n_steps = n_steps
         self.gamma = gamma
         self.gae_lambda = gae_lambda
@@ -264,7 +267,7 @@ class RNDOnPolicyAlgorithm(BaseAlgorithm):
             # Compute value for the last timestep
             values = self.policy.predict_values(obs_as_tensor(new_obs, self.device))  # type: ignore[arg-type]
 
-        rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
+        rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones, non_episodic=self.non_episodic)
 
         callback.update_locals(locals())
 

@@ -21,6 +21,7 @@ class RNDPPO(RNDOnPolicyAlgorithm):
 
     :param policy: The policy model to use (MlpPolicy, CnnPolicy, ...)
     :param env: The environment to learn from (if registered in Gym, can be str)
+    :param non_episodic: Whether to use non-episodic training
     :param learning_rate: The learning rate, it can be a function
         of the current progress remaining (from 1 to 0)
     :param n_steps: The number of steps to run for each environment per update
@@ -75,6 +76,7 @@ class RNDPPO(RNDOnPolicyAlgorithm):
         self,
         policy: Union[str, Type[ActorCriticPolicy]],
         env: Union[GymEnv, str],
+        non_episodic: bool = False,
         learning_rate: Union[float, Schedule] = 3e-4,
         n_steps: int = 2048,
         batch_size: int = 64,
@@ -104,6 +106,7 @@ class RNDPPO(RNDOnPolicyAlgorithm):
         super().__init__(
             policy,
             env,
+            non_episodic=non_episodic,
             learning_rate=learning_rate,
             n_steps=n_steps,
             gamma=gamma,
