@@ -63,18 +63,19 @@ class RunningMeanStd(nn.Module):
         # Update count
         self.count = total_count
 
-    def normalize(self, x: torch.Tensor, n_std: float = 1.0) -> torch.Tensor:
+    def normalize(self, x: torch.Tensor, baise=0.0, n_std: float = 1.0) -> torch.Tensor:
         """
         Normalize the input using the running mean and standard deviation.
 
         Args:
             x (torch.Tensor): Input data to be normalized.
+            baise (float): Baise to add to the normalized data.
             n_std (int): Number of standard deviations to normalize.
 
         Returns:
             torch.Tensor: Normalized data.
         """
-        return (x - self.mean) / (torch.sqrt(self.var) * n_std + self.epsilon)
+        return (x - self.mean) / (torch.sqrt(self.var) * n_std + self.epsilon) + baise
 
 
 

@@ -89,6 +89,7 @@ class RNDPPO(RNDOnPolicyAlgorithm):
         ent_coef: float = 0.0,
         vf_coef: float = 0.5,
         rnd_coef: float = 0.1,
+        rnd_update_proportion=0.25,
         max_grad_norm: float = 0.5,
         use_sde: bool = False,
         sde_sample_freq: int = -1,
@@ -133,6 +134,7 @@ class RNDPPO(RNDOnPolicyAlgorithm):
             ),
         )
         self.rnd_coef = rnd_coef
+        self.rnd_update_proportion = rnd_update_proportion
 
         # Sanity check, otherwise it will lead to noisy gradient and NaN
         # because of the advantage normalization
@@ -257,9 +259,9 @@ class RNDPPO(RNDOnPolicyAlgorithm):
 
                 # RND Loss
                 normed_rnd_loss = self.policy.compute_intrinsic_reward(rollout_data.observations)
-                # create a mask 
+                # mask for updating only a proportion of the RND loss 
                 mask = th.rand(len(normed_rnd_loss)).to(self.device)
-                mask = (mask < 0.25).type(th.FloatTensor).to(self.device)
+                mask = (mask < self.rnd_update_proportion).type(th.FloatTensor).to(self.device)
                 normed_rnd_loss = (normed_rnd_loss * mask).sum() / th.max(mask.sum(), th.Tensor([1]).to(self.device))
 
                 normed_rnd_losses.append(normed_rnd_loss.item())

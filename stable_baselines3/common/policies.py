@@ -1101,10 +1101,5 @@ class RNDActorCriticPolicy(ActorCriticPolicy):
             self.intrinsic_reward_rms.update(rewards)
 
         # normalize intrinsic rewards (Assuming rewards follow a Gaussian distribution
-        # 3 std from the mean should cover 99.7% of the distribution, and we clip the rewards)
-        rewards = self.intrinsic_reward_rms.normalize(rewards, n_std=1.0)
-        rewards = th.clamp(rewards, 0.0, 1.0)
-        # TODO: whether to use below code...
-        # when we have reward more than 3 std, we set to 0 (agent should learn from env when it is too far from the prediction)
-        # rewards = rewards * (rewards < 1.0).float()
+        rewards = self.intrinsic_reward_rms.normalize(rewards, baise=0.0, n_std=1.0)
         return rewards
