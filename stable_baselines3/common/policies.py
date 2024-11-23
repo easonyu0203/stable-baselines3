@@ -1095,8 +1095,8 @@ class RNDActorCriticPolicy(ActorCriticPolicy):
         rewards = self.intrinsic_reward_rms.normalize(rewards, n_std=3.0)
         rewards = th.clamp(rewards, 0.0, 1.0)
         # TODO: observe whether should use below...
-        # # when we have reward more than 3 std, we set to 0 (agent should learn from env when it is too far from the prediction)
-        # rewards = rewards * (rewards < 1.0).float()
+        # when we have reward more than 3 std, we set to 0 (agent should learn from env when it is too far from the prediction)
+        rewards = rewards * (rewards < 1.0).float()
         return rewards
 
 
