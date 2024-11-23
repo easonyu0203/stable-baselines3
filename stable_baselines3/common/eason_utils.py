@@ -1,9 +1,10 @@
+import numpy as np
 import torch
 import torch.nn as nn
 from typing import Tuple
 
 class RunningMeanStd(nn.Module):
-    def __init__(self, epsilon: float = 1e-4, shape: Tuple[int, ...] = ()) -> None:
+    def __init__(self, epsilon: float = 1e-7, shape: Tuple[int, ...] = ()) -> None:
         """
         Initializes the RunningMeanStd module.
 
@@ -16,6 +17,7 @@ class RunningMeanStd(nn.Module):
         self.register_buffer('mean', torch.zeros(shape, dtype=torch.float64))
         self.register_buffer('var', torch.ones(shape, dtype=torch.float64))
         self.register_buffer('count', torch.tensor(epsilon, dtype=torch.float64))
+        self.epsilon = epsilon
 
     def update(self, x: torch.Tensor) -> None:
         """
@@ -72,20 +74,45 @@ class RunningMeanStd(nn.Module):
         Returns:
             torch.Tensor: Normalized data.
         """
-        return (x - self.mean) / (torch.sqrt(self.var) * n_std + 1e-6)
+        return (x - self.mean) / (torch.sqrt(self.var) * n_std + self.epsilon)
 
 
-# Example Usage
-if __name__ == "__main__":
-    model = RunningMeanStd(shape=())
+
+class FeatureCNN(nn.Module):
+    def __init__(self, input_shape, convfeat=32, rep_size=512):
+        super(FeatureCNN, self).__init__()
+        c, h, w = input_shape
+
+        # Using nn.Sequential for better readability
+        self.conv_layers = nn.Sequential(
+            nn.Conv2d(c, convfeat, kernel_size=8, stride=4),
+            nn.LeakyReLU(),
+            nn.Conv2d(convfeat, convfeat * 2, kernel_size=4, stride=2),
+            nn.LeakyReLU(),
+            nn.Conv2d(convfeat * 2, convfeat * 2, kernel_size=3, stride=1),
+            nn.LeakyReLU()
+        )
+        
+        # Calculate output size after the convolutional layers
+        conv_out_size = self._get_conv_out((c, h, w))
+        
+        # Fully connected layer to generate feature representation
+        self.fc = nn.Linear(conv_out_size, rep_size)
+
+
+    def _get_conv_out(self, shape):
+        """Helper to compute the size after convolution layers."""
+        o = torch.zeros(1, *shape)
+        o = self.conv_layers(o)
+        return int(np.prod(o.size()))
+
+    def forward(self, x):
+        x = self.conv_layers(x)
+        x = x.view(x.size(0), -1)
+        return self.fc(x)
+
+
+
     
-    # Simulate some batches of data
-    batch1 = torch.tensor([1.0, 2.0, 3.0, 4.0])
-    batch2 = torch.tensor([5.0, 6.0, 7.0, 8.0])
-    
-    # Update running statistics with each batch
-    model.update(batch1)
-    print("After Batch 1:", model.mean.item(), torch.sqrt(model.var).item())
 
-    model.update(batch2)
-    print("After Batch 2:", model.mean.item(), torch.sqrt(model.var).item())
+    

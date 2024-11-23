@@ -197,8 +197,8 @@ class RNDPPO(RNDOnPolicyAlgorithm):
 
         entropy_losses = []
         pg_losses, value_losses = [], []
-        rnd_losses = []
-        raw_intr_rewards = []
+        normed_rnd_losses = []
+        raw_rnd_losses = []
         clip_fractions = []
 
         continue_training = True
@@ -256,21 +256,23 @@ class RNDPPO(RNDOnPolicyAlgorithm):
                 entropy_losses.append(entropy_loss.item())
 
                 # RND Loss
-                rnd_loss = self.policy.compute_intrinsic_reward(rollout_data.observations)
+                normed_rnd_loss = self.policy.compute_intrinsic_reward(rollout_data.observations)
                 # create a mask 
-                mask = th.ones_like(rnd_loss) # TODO: maybe use a threshold
-                rnd_loss = th.sum(rnd_loss * mask) / th.sum(mask)
+                mask = th.rand(len(normed_rnd_loss)).to(self.device)
+                mask = (mask < 0.25).type(th.FloatTensor).to(self.device)
+                normed_rnd_loss = (normed_rnd_loss * mask).sum() / th.max(mask.sum(), th.Tensor([1]).to(self.device))
 
-                rnd_losses.append(rnd_loss.item())
+                normed_rnd_losses.append(normed_rnd_loss.item())
 
                 # raw intrinsic rewards
                 with th.no_grad():
                     target_features, predictor_features = self.policy.rnd_forward(rollout_data.observations)
-                    raw_intr_reward = F.mse_loss(target_features, predictor_features, reduction='none').mean(1)
-                    raw_intr_rewards.append(raw_intr_reward.mean().item())
+                    raw_rnd_loss = F.mse_loss(target_features, predictor_features, reduction='none').mean(1)
+                    raw_rnd_losses.append(raw_rnd_loss.mean().item())
 
 
-                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss + self.rnd_coef * rnd_loss
+                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss + self.rnd_coef * normed_rnd_loss
+
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
                 # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
@@ -302,8 +304,8 @@ class RNDPPO(RNDOnPolicyAlgorithm):
 
         # Logs
         self.logger.record("train/entropy_loss", np.mean(entropy_losses))
-        self.logger.record("train/rnd_loss", np.mean(rnd_losses))
-        self.logger.record("train/raw_intr_reward", np.mean(raw_intr_rewards))
+        self.logger.record("train/raw_rnd_loss", np.mean(raw_rnd_losses))
+        self.logger.record("train/normed_rnd_loss", np.mean(normed_rnd_losses))
         self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
         self.logger.record("train/value_loss", np.mean(value_losses))
         self.logger.record("train/approx_kl", np.mean(approx_kl_divs))

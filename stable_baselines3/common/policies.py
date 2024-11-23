@@ -1061,6 +1061,10 @@ class RNDActorCriticPolicy(ActorCriticPolicy):
 
         # keep track of the intrinsic rewards
         self.intrinsic_reward_rms = RunningMeanStd(shape=())
+        self.obs_rms = RunningMeanStd(shape=observation_space.shape)
+
+        # Setup optimizer with initial learning rate
+        self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)  # type: ignore[call-arg]
 
 
     def rnd_forward(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
@@ -1083,27 +1087,24 @@ class RNDActorCriticPolicy(ActorCriticPolicy):
         :param obs: Observation
         :return: Intrinsic reward
         """
+        # Normalize the observations
+        normalized_obs = self.obs_rms.normalize(obs, n_std=1.0)
+        normalized_obs = th.clamp(normalized_obs, -5.0, 5.0)
+
+        # Compute the intrinsic reward
         target_features, predictor_features = self.rnd_forward(obs)
         rewards = F.mse_loss(target_features, predictor_features, reduction='none').mean(1)
 
         # Update running mean/std for intrinsic reward
         if update_rms:
-            self.update_intrinsic_reward_rms(rewards)
+            self.obs_rms.update(obs)
+            self.intrinsic_reward_rms.update(rewards)
 
         # normalize intrinsic rewards (Assuming rewards follow a Gaussian distribution
         # 3 std from the mean should cover 99.7% of the distribution, and we clip the rewards)
-        rewards = self.intrinsic_reward_rms.normalize(rewards, n_std=3.0)
+        rewards = self.intrinsic_reward_rms.normalize(rewards, n_std=1.0)
         rewards = th.clamp(rewards, 0.0, 1.0)
-        # TODO: observe whether should use below...
+        # TODO: whether to use below code...
         # when we have reward more than 3 std, we set to 0 (agent should learn from env when it is too far from the prediction)
-        rewards = rewards * (rewards < 1.0).float()
+        # rewards = rewards * (rewards < 1.0).float()
         return rewards
-
-
-    def update_intrinsic_reward_rms(self, intrinsic_rewards: th.Tensor) -> None:
-        """
-        Update the running mean and std of the intrinsic rewards.
-
-        :param intrinsic_rewards: Intrinsic rewards
-        """
-        self.intrinsic_reward_rms.update(intrinsic_rewards)
