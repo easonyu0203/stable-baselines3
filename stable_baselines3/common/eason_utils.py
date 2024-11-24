@@ -80,7 +80,7 @@ class RunningMeanStd(nn.Module):
 
 
 class FeatureCNN(nn.Module):
-    def __init__(self, input_shape, convfeat=32, rep_size=512):
+    def __init__(self, input_shape, convfeat=32, features_dim=512):
         super(FeatureCNN, self).__init__()
         c, h, w = input_shape
 
@@ -93,12 +93,13 @@ class FeatureCNN(nn.Module):
             nn.Conv2d(convfeat * 2, convfeat * 2, kernel_size=3, stride=1),
             nn.LeakyReLU()
         )
+        self.flatten = nn.Flatten()
         
         # Calculate output size after the convolutional layers
         conv_out_size = self._get_conv_out((c, h, w))
         
         # Fully connected layer to generate feature representation
-        self.fc = nn.Linear(conv_out_size, rep_size)
+        self.fc = nn.Linear(conv_out_size, features_dim)
 
 
     def _get_conv_out(self, shape):
@@ -109,7 +110,7 @@ class FeatureCNN(nn.Module):
 
     def forward(self, x):
         x = self.conv_layers(x)
-        x = x.view(x.size(0), -1)
+        x = self.flatten(x)
         return self.fc(x)
 
 
