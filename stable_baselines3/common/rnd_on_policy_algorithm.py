@@ -39,6 +39,8 @@ class RNDOnPolicyAlgorithm(BaseAlgorithm):
         instead of action noise exploration (default: False)
     :param sde_sample_freq: Sample a new noise matrix every n steps when using gSDE
         Default: -1 (only sample at the beginning of the rollout)
+    :param intr_reward_coef: Coefficient for the intrinsic reward
+    :param extr_reward_coef: Coefficient for the extrinsic reward
     :param rollout_buffer_class: Rollout buffer class to use. If ``None``, it will be automatically selected.
     :param rollout_buffer_kwargs: Keyword arguments to pass to the rollout buffer on creation.
     :param stats_window_size: Window size for the rollout logging, specifying the number of episodes to average
@@ -73,6 +75,8 @@ class RNDOnPolicyAlgorithm(BaseAlgorithm):
         max_grad_norm: float,
         use_sde: bool,
         sde_sample_freq: int,
+        intr_reward_coef: float = 1.0,
+        extr_reward_coef: float = 1.0,
         rollout_buffer_class: Optional[Type[RolloutBuffer]] = None,
         rollout_buffer_kwargs: Optional[Dict[str, Any]] = None,
         stats_window_size: int = 100,
@@ -111,6 +115,8 @@ class RNDOnPolicyAlgorithm(BaseAlgorithm):
         self.max_grad_norm = max_grad_norm
         self.rollout_buffer_class = rollout_buffer_class
         self.rollout_buffer_kwargs = rollout_buffer_kwargs or {}
+        self.intr_reward_coef = intr_reward_coef
+        self.extr_reward_coef = extr_reward_coef
 
         if _init_setup_model:
             self._setup_model()
@@ -220,10 +226,10 @@ class RNDOnPolicyAlgorithm(BaseAlgorithm):
                     # as we are sampling from an unbounded Gaussian distribution
                     clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
 
-            new_obs, rewards, dones, infos = env.step(clipped_actions)
+            new_obs, ext_rewards, dones, infos = env.step(clipped_actions)
 
             # TODO: This is placeholder where we replace the extrinsic reward with the intrinsic reward
-            rewards = intr_reward
+            rewards = self.intr_reward_coef * intr_reward + self.extr_reward_coef * ext_rewards
 
             self.num_timesteps += env.num_envs
 

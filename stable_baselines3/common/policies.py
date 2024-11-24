@@ -23,7 +23,7 @@ from stable_baselines3.common.distributions import (
     make_proba_distribution,
 )
 from stable_baselines3.common.preprocessing import get_action_dim, is_image_space, maybe_transpose, preprocess_obs
-from stable_baselines3.common.eason_utils import RunningMeanStd
+from stable_baselines3.common.eason_utils import FeatureCNN, RunningMeanStd
 from stable_baselines3.common.torch_layers import (
     BaseFeaturesExtractor,
     CombinedExtractor,
@@ -1035,25 +1035,34 @@ class RNDActorCriticPolicy(ActorCriticPolicy):
             optimizer_class,
             optimizer_kwargs,
         )
-        
-        self.rnd_feature_extractor = FlattenExtractor(observation_space) # flatten the observation for rnd
-        self.rnd_target = nn.Sequential(
-            nn.Linear(self.rnd_feature_extractor.features_dim, 32),
-            nn.LeakyReLU(),
-            nn.Linear(32, 32),
-            nn.LeakyReLU(),
-            nn.Linear(32, rnd_feature_dim),
-        )
-        self.rnd_predictor = nn.Sequential(
-            nn.Linear(self.rnd_feature_extractor.features_dim, 32),
-            nn.LeakyReLU(),
-            nn.Linear(32, 32),
-            nn.LeakyReLU(),
-            nn.Linear(32, rnd_feature_dim),
-        )
+
+        self._is_image_space = is_image_space(observation_space, check_channels=False, normalized_image=False)
+        if self._is_image_space:
+            self.rnd_feature_extractor = nn.Identity()
+            # TODO dynamically change obs shape
+            obs_shape = (1, *observation_space.shape[1:])
+            self.rnd_target = FeatureCNN(obs_shape, features_dim=rnd_feature_dim)
+            self.rnd_predictor = FeatureCNN(obs_shape, features_dim=rnd_feature_dim)
+        else:
+            self.rnd_feature_extractor = FlattenExtractor(observation_space) # flatten the observation for rnd
+            self.rnd_target = nn.Sequential(
+                nn.Linear(self.rnd_feature_extractor.features_dim, 32),
+                nn.LeakyReLU(),
+                nn.Linear(32, 32),
+                nn.LeakyReLU(),
+                nn.Linear(32, rnd_feature_dim),
+            )
+            self.rnd_predictor = nn.Sequential(
+                nn.Linear(self.rnd_feature_extractor.features_dim, 32),
+                nn.LeakyReLU(),
+                nn.Linear(32, 32),
+                nn.LeakyReLU(),
+                nn.Linear(32, rnd_feature_dim),
+            )
 
         # Initialize the weights of the RND target network
         self.rnd_target.apply(partial(self.init_weights, gain=np.sqrt(2)))
+        self.rnd_predictor.apply(partial(self.init_weights, gain=np.sqrt(2)))
 
         # freeze the target network
         for param in self.rnd_target.parameters():
@@ -1063,11 +1072,15 @@ class RNDActorCriticPolicy(ActorCriticPolicy):
         self.intrinsic_reward_rms = RunningMeanStd(shape=())
         self.obs_rms = RunningMeanStd(shape=observation_space.shape)
 
+        # TODO: dynamically change obs rms
+        if self._is_image_space:
+            self.obs_rms = RunningMeanStd(shape=(1, *observation_space.shape[1:]))
+
         # Setup optimizer with initial learning rate
         self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)  # type: ignore[call-arg]
 
 
-    def rnd_forward(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
+    def _rnd_forward(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
         """
         Forward pass in the RND networks.
 
@@ -1080,19 +1093,25 @@ class RNDActorCriticPolicy(ActorCriticPolicy):
         return target_features, predictor_features
     
     
-    def compute_intrinsic_reward(self, obs: th.Tensor, update_rms=False) -> th.Tensor:
+    def compute_intrinsic_reward(self, obs: th.Tensor, update_rms=False, normalized_reward=True) -> th.Tensor:
         """
         Compute the intrinsic reward given the observations.
 
         :param obs: Observation
+        :param normalized_reward: Whether to normalize the intrinsic reward or not
         :return: Intrinsic reward
         """
+        # TODO: dynamically change obs
+        if self._is_image_space:
+            obs = obs[:, -1:, :, :]
+
+
         # Normalize the observations
         normalized_obs = self.obs_rms.normalize(obs, n_std=1.0)
         normalized_obs = th.clamp(normalized_obs, -5.0, 5.0)
 
         # Compute the intrinsic reward
-        target_features, predictor_features = self.rnd_forward(obs)
+        target_features, predictor_features = self._rnd_forward(normalized_obs)
         rewards = F.mse_loss(target_features, predictor_features, reduction='none').mean(1)
 
         # Update running mean/std for intrinsic reward
@@ -1101,5 +1120,6 @@ class RNDActorCriticPolicy(ActorCriticPolicy):
             self.intrinsic_reward_rms.update(rewards)
 
         # normalize intrinsic rewards (Assuming rewards follow a Gaussian distribution
-        rewards = self.intrinsic_reward_rms.normalize(rewards, baise=0.0, n_std=1.0)
+        if normalized_reward:
+            rewards = self.intrinsic_reward_rms.normalize(rewards, baise=0.0, n_std=1.0)
         return rewards

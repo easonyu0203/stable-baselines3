@@ -43,6 +43,8 @@ class RNDPPO(RNDOnPolicyAlgorithm):
     :param ent_coef: Entropy coefficient for the loss calculation
     :param vf_coef: Value function coefficient for the loss calculation
     :param rnd_coef: Intrinsic reward coefficient for the loss calculation
+    :param intr_reward_coef: Coefficient for the intrinsic reward
+    :param extr_reward_coef: Coefficient for the extrinsic reward
     :param max_grad_norm: The maximum value for the gradient clipping
     :param use_sde: Whether to use generalized State Dependent Exploration (gSDE)
         instead of action noise exploration (default: False)
@@ -89,6 +91,8 @@ class RNDPPO(RNDOnPolicyAlgorithm):
         ent_coef: float = 0.0,
         vf_coef: float = 0.5,
         rnd_coef: float = 0.1,
+        intr_reward_coef: float = 1.0,
+        extr_reward_coef: float = 1.0,
         rnd_update_proportion=0.25,
         max_grad_norm: float = 0.5,
         use_sde: bool = False,
@@ -116,6 +120,8 @@ class RNDPPO(RNDOnPolicyAlgorithm):
             vf_coef=vf_coef,
             max_grad_norm=max_grad_norm,
             use_sde=use_sde,
+            intr_reward_coef=intr_reward_coef,
+            extr_reward_coef=extr_reward_coef,
             sde_sample_freq=sde_sample_freq,
             rollout_buffer_class=rollout_buffer_class,
             rollout_buffer_kwargs=rollout_buffer_kwargs,
@@ -268,8 +274,7 @@ class RNDPPO(RNDOnPolicyAlgorithm):
 
                 # raw intrinsic rewards
                 with th.no_grad():
-                    target_features, predictor_features = self.policy.rnd_forward(rollout_data.observations)
-                    raw_rnd_loss = F.mse_loss(target_features, predictor_features, reduction='none').mean(1)
+                    raw_rnd_loss = self.policy.compute_intrinsic_reward(rollout_data.observations, normalized_reward=False)
                     raw_rnd_losses.append(raw_rnd_loss.mean().item())
 
 
