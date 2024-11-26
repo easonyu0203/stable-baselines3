@@ -311,8 +311,10 @@ class RNDPPO(RNDOnPolicyAlgorithm):
 
         # Logs
         self.logger.record("train/entropy_loss", np.mean(entropy_losses))
-        self.logger.record("train/raw_rnd_loss", np.mean(raw_rnd_losses))
-        self.logger.record("train/normed_rnd_loss", np.mean(normed_rnd_losses))
+        self.logger.record("train/rnd_loss_raw", np.mean(raw_rnd_losses))
+        self.logger.record("train/rnd_loss_normed", np.mean(normed_rnd_losses))
+        self.logger.record("train/rnd_intr_reward_mean", self.policy.intrinsic_reward_rms.mean.item())
+        self.logger.record("train/rnd_intr_reward_std", np.sqrt(self.policy.intrinsic_reward_rms.var.item()))
         self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
         self.logger.record("train/value_loss", np.mean(value_losses))
         self.logger.record("train/approx_kl", np.mean(approx_kl_divs))

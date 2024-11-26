@@ -209,6 +209,8 @@ class RNDOnPolicyAlgorithm(BaseAlgorithm):
                 # Convert to pytorch tensor or to TensorDict
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
                 actions, values, log_probs = self.policy(obs_tensor)
+
+                # Intrinsic reward
                 intr_reward = self.policy.compute_intrinsic_reward(obs_tensor, update_rms=True)
                 intr_reward = intr_reward.cpu().numpy()
             actions = actions.cpu().numpy()

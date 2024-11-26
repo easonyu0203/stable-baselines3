@@ -4,7 +4,7 @@ import torch.nn as nn
 from typing import Tuple
 
 class RunningMeanStd(nn.Module):
-    def __init__(self, epsilon: float = 1e-7, shape: Tuple[int, ...] = ()) -> None:
+    def __init__(self, epsilon: float = 1e-4, shape: Tuple[int, ...] = ()) -> None:
         """
         Initializes the RunningMeanStd module.
 
@@ -63,19 +63,23 @@ class RunningMeanStd(nn.Module):
         # Update count
         self.count = total_count
 
-    def normalize(self, x: torch.Tensor, baise=0.0, n_std: float = 1.0) -> torch.Tensor:
+    def normalize(self, x: torch.Tensor, bias=0.0, n_std: float = 1.0, with_mean=True) -> torch.Tensor:
         """
         Normalize the input using the running mean and standard deviation.
 
         Args:
             x (torch.Tensor): Input data to be normalized.
-            baise (float): Baise to add to the normalized data.
+            bias (float): bias to add to the normalized data.
             n_std (int): Number of standard deviations to normalize.
+            with_mean (bool): Whether to normalize with the mean.
 
         Returns:
             torch.Tensor: Normalized data.
         """
-        return (x - self.mean) / (torch.sqrt(self.var) * n_std + self.epsilon) + baise
+        if with_mean:
+             (x - self.mean) / (torch.sqrt(self.var) * n_std + self.epsilon) + bias
+        return x / (torch.sqrt(self.var) * n_std + self.epsilon) + bias
+    
 
 
 

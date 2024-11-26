@@ -1117,9 +1117,12 @@ class RNDActorCriticPolicy(ActorCriticPolicy):
         # Update running mean/std for intrinsic reward
         if update_rms:
             self.obs_rms.update(obs)
-            self.intrinsic_reward_rms.update(rewards)
+            # TODO: hacking way to prevent too large intrinsic reward,
+            # only update intr reward rms when the max intrinsic reward is less than 10
+            if th.max(rewards) <= 10:
+                self.intrinsic_reward_rms.update(rewards)
 
         # normalize intrinsic rewards (Assuming rewards follow a Gaussian distribution
         if normalized_reward:
-            rewards = self.intrinsic_reward_rms.normalize(rewards, baise=0.0, n_std=1.0)
+            rewards = self.intrinsic_reward_rms.normalize(rewards, bias=0.0, n_std=1.0, with_mean=False)
         return rewards
