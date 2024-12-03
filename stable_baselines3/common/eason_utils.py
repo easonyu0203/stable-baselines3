@@ -81,10 +81,35 @@ class RunningMeanStd(nn.Module):
         return x / (torch.sqrt(self.var) * n_std + self.epsilon) + bias
     
 
+class RewardForwardFilter:
+    def __init__(self, gamma: float = 0.99):
+        """
+        Initialize the RewardForwardFilter with a discount factor gamma.
+        """
+        self.rewems = None  # Stores the running discounted reward estimate
+        self.gamma = gamma  # Discount factor
+
+    def update(self, rews: torch.Tensor):
+        """
+        Update the forward filter with new rewards.
+
+        Args:
+            rews (torch.Tensor): Tensor of rewards for the current timestep.
+
+        Returns:
+            torch.Tensor: Updated running discounted rewards.
+        """
+        if self.rewems is None:
+            # Initialize with the first rewards
+            self.rewems = rews
+        else:
+            # Update with the discounted sum formula
+            self.rewems = self.rewems * self.gamma + rews
+        return self.rewems
 
 
 class FeatureCNN(nn.Module):
-    def __init__(self, input_shape, convfeat=32, features_dim=512):
+    def __init__(self, input_shape, convfeat=32, features_dim=512, simple_linear=True):
         super(FeatureCNN, self).__init__()
         c, h, w = input_shape
 
@@ -103,7 +128,16 @@ class FeatureCNN(nn.Module):
         conv_out_size = self._get_conv_out((c, h, w))
         
         # Fully connected layer to generate feature representation
-        self.fc = nn.Linear(conv_out_size, features_dim)
+        if simple_linear:
+            self.fc = nn.Linear(conv_out_size, features_dim)
+        else:
+            self.fc = nn.Sequential(
+                nn.Linear(conv_out_size, 512),
+                nn.ReLU(),
+                nn.Linear(512, 512),
+                nn.ReLU(),
+                nn.Linear(512, features_dim)
+            )
 
 
     def _get_conv_out(self, shape):

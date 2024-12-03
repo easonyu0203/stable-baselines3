@@ -281,7 +281,11 @@ class CategoricalDistribution(Distribution):
             of the policy network (before the action layer)
         :return:
         """
-        action_logits = nn.Linear(latent_dim, self.action_dim)
+        action_logits = nn.Sequential(
+            nn.Linear(latent_dim, latent_dim),
+            nn.ReLU(),
+            nn.Linear(latent_dim, self.action_dim),
+        )
         return action_logits
 
     def proba_distribution(self: SelfCategoricalDistribution, action_logits: th.Tensor) -> SelfCategoricalDistribution:
@@ -332,8 +336,11 @@ class MultiCategoricalDistribution(Distribution):
             of the policy network (before the action layer)
         :return:
         """
-
-        action_logits = nn.Linear(latent_dim, sum(self.action_dims))
+        action_logits = nn.Sequential(
+            nn.Linear(latent_dim, latent_dim),
+            nn.ReLU(),
+            nn.Linear(latent_dim, sum(self.action_dims)),
+        )
         return action_logits
 
     def proba_distribution(
@@ -388,7 +395,11 @@ class BernoulliDistribution(Distribution):
             of the policy network (before the action layer)
         :return:
         """
-        action_logits = nn.Linear(latent_dim, self.action_dims)
+        action_logits = nn.Sequential(
+            nn.Linear(latent_dim, latent_dim),
+            nn.ReLU(),
+            nn.Linear(latent_dim, self.action_dims),
+        )
         return action_logits
 
     def proba_distribution(self: SelfBernoulliDistribution, action_logits: th.Tensor) -> SelfBernoulliDistribution:

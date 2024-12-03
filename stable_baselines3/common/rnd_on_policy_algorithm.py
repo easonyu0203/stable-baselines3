@@ -210,9 +210,7 @@ class RNDOnPolicyAlgorithm(BaseAlgorithm):
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
                 actions, values, log_probs = self.policy(obs_tensor)
 
-                # Intrinsic reward
-                intr_reward = self.policy.compute_intrinsic_reward(obs_tensor, update_rms=True)
-                intr_reward = intr_reward.cpu().numpy()
+
             actions = actions.cpu().numpy()
 
             # Rescale and perform action
@@ -230,7 +228,13 @@ class RNDOnPolicyAlgorithm(BaseAlgorithm):
 
             new_obs, ext_rewards, dones, infos = env.step(clipped_actions)
 
-            # TODO: This is placeholder where we replace the extrinsic reward with the intrinsic reward
+            with th.no_grad():
+                # Intrinsic reward by uncertainty for next observation
+                new_obs_tensor = obs_as_tensor(new_obs, self.device)
+                intr_reward = self.policy.compute_intrinsic_reward(new_obs_tensor, update_rms=True)
+                intr_reward = intr_reward.cpu().numpy()
+
+            # Combine intrinsic and extrinsic rewards
             rewards = self.intr_reward_coef * intr_reward + self.extr_reward_coef * ext_rewards
 
             self.num_timesteps += env.num_envs

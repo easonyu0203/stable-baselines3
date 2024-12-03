@@ -23,7 +23,7 @@ from stable_baselines3.common.distributions import (
     make_proba_distribution,
 )
 from stable_baselines3.common.preprocessing import get_action_dim, is_image_space, maybe_transpose, preprocess_obs
-from stable_baselines3.common.eason_utils import FeatureCNN, RunningMeanStd
+from stable_baselines3.common.eason_utils import FeatureCNN, RunningMeanStd, RewardForwardFilter
 from stable_baselines3.common.torch_layers import (
     BaseFeaturesExtractor,
     CombinedExtractor,
@@ -608,6 +608,10 @@ class ActorCriticPolicy(BasePolicy):
         else:
             raise NotImplementedError(f"Unsupported distribution '{self.action_dist}'.")
 
+        self.extra_layer = nn.Sequential(
+            nn.Linear(self.mlp_extractor.latent_dim_vf, self.mlp_extractor.latent_dim_vf),
+            nn.ReLU(),
+        )
         self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 1)
         # Init weights: use orthogonal initialization
         # with small initial weight for the output
@@ -652,7 +656,7 @@ class ActorCriticPolicy(BasePolicy):
             latent_pi = self.mlp_extractor.forward_actor(pi_features)
             latent_vf = self.mlp_extractor.forward_critic(vf_features)
         # Evaluate the values for the given observations
-        values = self.value_net(latent_vf)
+        values = self.value_net(self.extra_layer(latent_vf) + latent_vf)
         distribution = self._get_action_dist_from_latent(latent_pi)
         actions = distribution.get_actions(deterministic=deterministic)
         log_prob = distribution.log_prob(actions)
@@ -1041,8 +1045,8 @@ class RNDActorCriticPolicy(ActorCriticPolicy):
             self.rnd_feature_extractor = nn.Identity()
             # TODO dynamically change obs shape
             obs_shape = (1, *observation_space.shape[1:])
-            self.rnd_target = FeatureCNN(obs_shape, features_dim=rnd_feature_dim)
-            self.rnd_predictor = FeatureCNN(obs_shape, features_dim=rnd_feature_dim)
+            self.rnd_target = FeatureCNN(obs_shape, features_dim=rnd_feature_dim, simple_linear=True)
+            self.rnd_predictor = FeatureCNN(obs_shape, features_dim=rnd_feature_dim, simple_linear=False)
         else:
             self.rnd_feature_extractor = FlattenExtractor(observation_space) # flatten the observation for rnd
             self.rnd_target = nn.Sequential(
@@ -1069,7 +1073,9 @@ class RNDActorCriticPolicy(ActorCriticPolicy):
             param.requires_grad = False
 
         # keep track of the intrinsic rewards
-        self.intrinsic_reward_rms = RunningMeanStd(shape=())
+        # TODO use rff as normalizer
+        self.rff = RewardForwardFilter(gamma=0.99)
+        self.rff_rms = RunningMeanStd(shape=())
         self.obs_rms = RunningMeanStd(shape=observation_space.shape)
 
         # TODO: dynamically change obs rms
@@ -1117,12 +1123,14 @@ class RNDActorCriticPolicy(ActorCriticPolicy):
         # Update running mean/std for intrinsic reward
         if update_rms:
             self.obs_rms.update(obs)
-            # TODO: hacking way to prevent too large intrinsic reward,
-            # only update intr reward rms when the max intrinsic reward is less than 10
-            if th.max(rewards) <= 10:
-                self.intrinsic_reward_rms.update(rewards)
+            # NOTE: hacking way to prevent too large intrinsic reward,
+            # only update intr reward rms when the max intrinsic reward is less than 2
+            # which equivalent to waiting the rnd error to stable
+            if th.mean(rewards) <= 0.2:
+                filtered_rewards = self.rff.update(rewards)
+                self.rff_rms.update(filtered_rewards)
 
-        # normalize intrinsic rewards (Assuming rewards follow a Gaussian distribution
+        # normalize intrinsic rewards
         if normalized_reward:
-            rewards = self.intrinsic_reward_rms.normalize(rewards, bias=0.0, n_std=1.0, with_mean=False)
+            rewards = self.rff_rms.normalize(rewards, bias=0.0, n_std=1.0, with_mean=False) 
         return rewards

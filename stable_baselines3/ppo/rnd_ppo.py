@@ -264,21 +264,21 @@ class RNDPPO(RNDOnPolicyAlgorithm):
                 entropy_losses.append(entropy_loss.item())
 
                 # RND Loss
-                normed_rnd_loss = self.policy.compute_intrinsic_reward(rollout_data.observations)
+                raw_rnd_loss = self.policy.compute_intrinsic_reward(rollout_data.observations, normalized_reward=False)
                 # mask for updating only a proportion of the RND loss 
-                mask = th.rand(len(normed_rnd_loss)).to(self.device)
+                mask = th.rand(len(raw_rnd_loss)).to(self.device)
                 mask = (mask < self.rnd_update_proportion).type(th.FloatTensor).to(self.device)
-                normed_rnd_loss = (normed_rnd_loss * mask).sum() / th.max(mask.sum(), th.Tensor([1]).to(self.device))
+                raw_rnd_loss = (raw_rnd_loss * mask).sum() / th.max(mask.sum(), th.Tensor([1]).to(self.device))
 
-                normed_rnd_losses.append(normed_rnd_loss.item())
+                raw_rnd_losses.append(raw_rnd_loss.item())
 
                 # raw intrinsic rewards
                 with th.no_grad():
-                    raw_rnd_loss = self.policy.compute_intrinsic_reward(rollout_data.observations, normalized_reward=False)
-                    raw_rnd_losses.append(raw_rnd_loss.mean().item())
+                    normed_rnd_loss = self.policy.compute_intrinsic_reward(rollout_data.observations, normalized_reward=True)
+                    normed_rnd_losses.append(normed_rnd_loss.mean().item())
 
 
-                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss + self.rnd_coef * normed_rnd_loss
+                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss + self.rnd_coef * raw_rnd_loss
 
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
@@ -313,8 +313,8 @@ class RNDPPO(RNDOnPolicyAlgorithm):
         self.logger.record("train/entropy_loss", np.mean(entropy_losses))
         self.logger.record("train/rnd_loss_raw", np.mean(raw_rnd_losses))
         self.logger.record("train/rnd_loss_normed", np.mean(normed_rnd_losses))
-        self.logger.record("train/rnd_intr_reward_mean", self.policy.intrinsic_reward_rms.mean.item())
-        self.logger.record("train/rnd_intr_reward_std", np.sqrt(self.policy.intrinsic_reward_rms.var.item()))
+        self.logger.record("train/rnd_rff_mean", self.policy.rff_rms.mean.item())
+        self.logger.record("train/rnd_rff_std", np.sqrt(self.policy.rff_rms.var.item()))
         self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
         self.logger.record("train/value_loss", np.mean(value_losses))
         self.logger.record("train/approx_kl", np.mean(approx_kl_divs))
