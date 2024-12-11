@@ -11,6 +11,7 @@ import numpy as np
 import torch as th
 from gymnasium import spaces
 from torch import nn
+import torch.nn.functional as F
 
 from stable_baselines3.common.distributions import (
     BernoulliDistribution,
@@ -22,6 +23,7 @@ from stable_baselines3.common.distributions import (
     make_proba_distribution,
 )
 from stable_baselines3.common.preprocessing import get_action_dim, is_image_space, maybe_transpose, preprocess_obs
+from stable_baselines3.common.eason_utils import FeatureCNN, RunningMeanStd, RewardForwardFilter
 from stable_baselines3.common.torch_layers import (
     BaseFeaturesExtractor,
     CombinedExtractor,
@@ -606,6 +608,10 @@ class ActorCriticPolicy(BasePolicy):
         else:
             raise NotImplementedError(f"Unsupported distribution '{self.action_dist}'.")
 
+        self.extra_layer = nn.Sequential(
+            nn.Linear(self.mlp_extractor.latent_dim_vf, self.mlp_extractor.latent_dim_vf),
+            nn.ReLU(),
+        )
         self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 1)
         # Init weights: use orthogonal initialization
         # with small initial weight for the output
@@ -618,7 +624,8 @@ class ActorCriticPolicy(BasePolicy):
                 self.features_extractor: np.sqrt(2),
                 self.mlp_extractor: np.sqrt(2),
                 self.action_net: 0.01,
-                self.value_net: 1,
+                self.value_net: 0.01,
+                self.extra_layer: 0.1,
             }
             if not self.share_features_extractor:
                 # Note(antonin): this is to keep SB3 results
@@ -650,7 +657,7 @@ class ActorCriticPolicy(BasePolicy):
             latent_pi = self.mlp_extractor.forward_actor(pi_features)
             latent_vf = self.mlp_extractor.forward_critic(vf_features)
         # Evaluate the values for the given observations
-        values = self.value_net(latent_vf)
+        values = self.value_net(self.extra_layer(latent_vf) + latent_vf)
         distribution = self._get_action_dist_from_latent(latent_pi)
         actions = distribution.get_actions(deterministic=deterministic)
         log_prob = distribution.log_prob(actions)
@@ -985,3 +992,147 @@ class ContinuousCritic(BaseModel):
         with th.no_grad():
             features = self.extract_features(obs, self.features_extractor)
         return self.q_networks[0](th.cat([features, actions], dim=1))
+
+
+class RNDActorCriticPolicy(ActorCriticPolicy):
+    """
+    Policy class with Random Network Distillation (RND).
+    It is used by the RND algorithm.
+    """
+
+    def __init__(
+        self,
+        observation_space: spaces.Space,
+        action_space: spaces.Space,
+        lr_schedule: Schedule,
+        rnd_feature_dim: int,
+        net_arch: Optional[Union[List[int], Dict[str, List[int]]]] = None,
+        activation_fn: Type[nn.Module] = nn.Tanh,
+        ortho_init: bool = True,
+        use_sde: bool = False,
+        log_std_init: float = 0.0,
+        full_std: bool = True,
+        use_expln: bool = False,
+        squash_output: bool = False,
+        features_extractor_class: Type[BaseFeaturesExtractor] = FlattenExtractor,
+        features_extractor_kwargs: Optional[Dict[str, Any]] = None,
+        share_features_extractor: bool = True,
+        normalize_images: bool = True,
+        optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
+        optimizer_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            observation_space,
+            action_space,
+            lr_schedule,
+            net_arch,
+            activation_fn,
+            ortho_init,
+            use_sde,
+            log_std_init,
+            full_std,
+            use_expln,
+            squash_output,
+            features_extractor_class,
+            features_extractor_kwargs,
+            share_features_extractor,
+            normalize_images,
+            optimizer_class,
+            optimizer_kwargs,
+        )
+
+        self._is_image_space = is_image_space(observation_space, check_channels=False, normalized_image=False)
+        if self._is_image_space:
+            self.rnd_feature_extractor = nn.Identity()
+            # TODO dynamically change obs shape
+            obs_shape = (1, *observation_space.shape[1:])
+            self.rnd_target = FeatureCNN(obs_shape, features_dim=rnd_feature_dim, simple_linear=True)
+            self.rnd_predictor = FeatureCNN(obs_shape, features_dim=rnd_feature_dim, simple_linear=False)
+        else:
+            self.rnd_feature_extractor = FlattenExtractor(observation_space) # flatten the observation for rnd
+            self.rnd_target = nn.Sequential(
+                nn.Linear(self.rnd_feature_extractor.features_dim, 32),
+                nn.LeakyReLU(),
+                nn.Linear(32, 32),
+                nn.LeakyReLU(),
+                nn.Linear(32, rnd_feature_dim),
+            )
+            self.rnd_predictor = nn.Sequential(
+                nn.Linear(self.rnd_feature_extractor.features_dim, 32),
+                nn.LeakyReLU(),
+                nn.Linear(32, 32),
+                nn.LeakyReLU(),
+                nn.Linear(32, rnd_feature_dim),
+            )
+
+        # Initialize the weights of the RND target network
+        self.rnd_target.apply(partial(self.init_weights, gain=np.sqrt(2)))
+        self.rnd_predictor.apply(partial(self.init_weights, gain=np.sqrt(2)))
+
+        # freeze the target network
+        for param in self.rnd_target.parameters():
+            param.requires_grad = False
+
+        # keep track of the intrinsic rewards
+        # TODO use rff as normalizer
+        self.rff = RewardForwardFilter(gamma=0.99)
+        self.rff_rms = RunningMeanStd(shape=())
+        self.obs_rms = RunningMeanStd(shape=observation_space.shape)
+
+        # TODO: dynamically change obs rms
+        if self._is_image_space:
+            self.obs_rms = RunningMeanStd(shape=(1, *observation_space.shape[1:]))
+
+        # Setup optimizer with initial learning rate
+        self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)  # type: ignore[call-arg]
+
+
+    def _rnd_forward(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
+        """
+        Forward pass in the RND networks.
+
+        :param obs: Observation
+        :return: target and predictor features
+        """
+        rnd_features = self.rnd_feature_extractor(obs.float())
+        target_features = self.rnd_target(rnd_features)
+        predictor_features = self.rnd_predictor(rnd_features)
+        return target_features, predictor_features
+    
+    
+    def compute_intrinsic_reward(self, obs: th.Tensor, update_rms=False, normalized_reward=True) -> th.Tensor:
+        """
+        Compute the intrinsic reward given the observations.
+
+        :param obs: Observation
+        :param normalized_reward: Whether to normalize the intrinsic reward or not
+        :return: Intrinsic reward
+        """
+        # TODO: dynamically change obs
+        if self._is_image_space:
+            # since we use stack obs, we only need the last frame
+            obs = obs[:, -1:, :, :]
+
+
+        # Normalize the observations
+        normalized_obs = self.obs_rms.normalize(obs, n_std=1.0)
+        normalized_obs = th.clamp(normalized_obs, -5.0, 5.0)
+
+        # Compute the intrinsic reward
+        target_features, predictor_features = self._rnd_forward(normalized_obs)
+        rewards = F.mse_loss(target_features, predictor_features, reduction='none').mean(1)
+
+        # Update running mean/std for intrinsic reward
+        if update_rms:
+            self.obs_rms.update(obs)
+            # NOTE: hacking way to prevent too large intrinsic reward,
+            # only update intr reward rms when the max intrinsic reward is less than 2
+            # which equivalent to waiting the rnd error to stable
+            if th.mean(rewards) <= 1:
+                filtered_rewards = self.rff.update(rewards)
+                self.rff_rms.update(filtered_rewards)
+
+        # normalize intrinsic rewards
+        if normalized_reward:
+            rewards = self.rff_rms.normalize(rewards, bias=0.0, n_std=1.0, with_mean=False) 
+        return rewards
