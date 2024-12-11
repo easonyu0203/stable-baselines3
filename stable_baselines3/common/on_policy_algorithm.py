@@ -217,9 +217,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
 
             new_obs, rewards, dones, infos = env.step(clipped_actions)
 
-            # Perform mutation on the rewards if needed
-            rewards = self.mutate_rewards(rewards)
-
             self.num_timesteps += env.num_envs
 
             # Give access to local variables
@@ -269,14 +266,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         callback.on_rollout_end()
 
         return True
-
-    def mutate_rewards(self, rewards: np.ndarray) -> np.ndarray:
-        """
-        Mutate the rewards if needed.
-
-        :return: The mutated rewards
-        """
-        return rewards
 
     def train(self) -> None:
         """
