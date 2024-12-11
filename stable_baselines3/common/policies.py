@@ -624,7 +624,8 @@ class ActorCriticPolicy(BasePolicy):
                 self.features_extractor: np.sqrt(2),
                 self.mlp_extractor: np.sqrt(2),
                 self.action_net: 0.01,
-                self.value_net: 1,
+                self.value_net: 0.01,
+                self.extra_layer: 0.1,
             }
             if not self.share_features_extractor:
                 # Note(antonin): this is to keep SB3 results
@@ -1109,6 +1110,7 @@ class RNDActorCriticPolicy(ActorCriticPolicy):
         """
         # TODO: dynamically change obs
         if self._is_image_space:
+            # since we use stack obs, we only need the last frame
             obs = obs[:, -1:, :, :]
 
 
@@ -1126,7 +1128,7 @@ class RNDActorCriticPolicy(ActorCriticPolicy):
             # NOTE: hacking way to prevent too large intrinsic reward,
             # only update intr reward rms when the max intrinsic reward is less than 2
             # which equivalent to waiting the rnd error to stable
-            if th.mean(rewards) <= 0.2:
+            if th.mean(rewards) <= 1:
                 filtered_rewards = self.rff.update(rewards)
                 self.rff_rms.update(filtered_rewards)
 
